@@ -1,0 +1,431 @@
+# 文件：custom_components/openlist/services.yaml
+
+# ==========================
+# 🔹 任务类服务
+# ==========================
+get_task_info:
+  name: 获取任务信息
+  description: 根据任务类型获取任务信息，包括任务ID、名称、进度、状态等详细信息。
+  fields:
+    task_type:
+      required: true
+      example: move
+      selector:
+        select:
+          options:
+            - upload
+            - copy 
+            - offline_download
+            - offline_download_transfer
+            - decompress
+            - decompress_upload
+            - move
+
+get_task_done:
+  name: 获取已完成任务
+  description: 获取指定任务类型的已完成任务。
+  fields:
+    task_type:
+      required: true
+      example: upload
+      selector:
+        select:
+          options:
+            - upload
+            - copy 
+            - offline_download
+            - offline_download_transfer
+            - decompress
+            - decompress_upload
+            - move
+
+get_task_undone:
+  name: 获取未完成任务
+  description: 获取指定任务类型的未完成任务。
+  fields:
+    task_type:
+      required: true
+      example: upload
+      selector:
+        select:
+          options:
+            - upload
+            - copy 
+            - offline_download
+            - offline_download_transfer
+            - decompress
+            - decompress_upload
+            - move
+
+delete_task:
+  name: 删除任务
+  description: 删除指定任务。
+  fields:
+    task_type:
+      required: true
+      selector:
+        select:
+          options: 
+            - upload
+            - copy 
+            - offline_download
+            - offline_download_transfer
+            - decompress
+            - decompress_upload
+            - move
+    tid:
+      required: true
+      example: 123
+
+cancel_task:
+  name: 取消任务
+  description: 取消指定任务。
+  fields:
+    task_type:
+      required: true
+      selector:
+        select:
+          options: 
+            - upload
+            - copy 
+            - offline_download
+            - offline_download_transfer
+            - decompress
+            - decompress_upload
+            - move
+    tid:
+      required: true
+      example: 123
+
+clear_done_tasks:
+  name: 清除已完成任务
+  description: 清除指定类型的已完成任务。
+  fields:
+    task_type:
+      required: true
+      selector:
+        select:
+          options: 
+            - upload
+            - copy 
+            - offline_download
+            - offline_download_transfer
+            - decompress
+            - decompress_upload
+            - move
+
+clear_succeeded_tasks:
+  name: 清除成功任务
+  description: 清除指定类型的成功任务。
+  fields:
+    task_type:
+      required: true
+      selector:
+        select:
+          options: 
+            - upload
+            - copy 
+            - offline_download
+            - offline_download_transfer
+            - decompress
+            - decompress_upload
+            - move
+
+retry_task:
+  name: 重试任务
+  description: 重试指定任务。
+  fields:
+    task_type:
+      required: true
+      selector:
+        select:
+          options: 
+            - upload
+            - copy 
+            - offline_download
+            - offline_download_transfer
+            - decompress
+            - decompress_upload
+            - move
+    tid:
+      required: true
+      example: 456
+
+retry_failed_tasks:
+  name: 重试失败任务
+  description: 重试所有失败的任务。
+  fields:
+    task_type:
+      required: true
+      selector:
+        select:
+          options: 
+            - upload
+            - copy 
+            - offline_download
+            - offline_download_transfer
+            - decompress
+            - decompress_upload
+            - move
+
+delete_some_tasks:
+  name: 批量删除任务
+  description: 批量删除指定任务。
+  fields:
+    task_type:
+      required: true
+      selector:
+        select:
+          options: 
+            - upload
+            - copy 
+            - offline_download
+            - offline_download_transfer
+            - decompress
+            - decompress_upload
+            - move
+    tids:
+      required: true
+      example: [1001, 1002, 1003]
+      selector:
+        object:
+
+cancel_some_tasks:
+  name: 批量取消任务
+  description: 批量取消指定任务。
+  fields:
+    task_type:
+      required: true
+      selector:
+        select:
+          options: 
+            - upload
+            - copy 
+            - offline_download
+            - offline_download_transfer
+            - decompress
+            - decompress_upload
+            - move
+    tids:
+      required: true
+      example: [1001, 1002, 1003]
+      selector:
+        object:
+
+retry_some_tasks:
+  name: 批量重试任务
+  description: 批量重试指定任务。
+  fields:
+    task_type:
+      required: true
+      selector:
+        select:
+          options: 
+            - upload
+            - copy 
+            - offline_download
+            - offline_download_transfer
+            - decompress
+            - decompress_upload
+            - move
+    tids:
+      required: true
+      example: [1001, 1002, 1003]
+      selector:
+        object:
+
+# ==========================
+# 🔹 文件类服务
+# ==========================
+mkdir:
+  name: 创建文件夹
+  description: 在指定路径创建文件夹。
+  fields:
+    path:
+      required: true
+      example: /downloads/newfolder
+
+rename:
+  name: 重命名文件或文件夹
+  description: 修改文件或文件夹名称。
+  fields:
+    path:
+      required: true
+      example: /downloads/file.txt
+    name:
+      required: true
+      example: newname.txt
+
+list_files:
+  name: 列出文件
+  description: 获取路径下的文件列表。
+  fields:
+    path:
+      required: false
+      example: /
+
+get_file_info:
+  name: 获取文件信息
+  description: 获取指定文件的详细信息。
+  fields:
+    path:
+      required: true
+      example: /downloads/movie.mp4
+
+search_files:
+  name: 搜索文件
+  description: 根据关键字搜索文件。
+  fields:
+    parent:
+      required: true
+      example: /downloads
+    keywords:
+      required: true
+      example: linux.iso
+    scope:
+      required: true
+      example: all
+
+get_dirs:
+  name: 获取目录列表
+  description: 获取所有目录。
+
+batch_rename:
+  name: 批量重命名
+  description: 批量修改文件名。
+  fields:
+    src_dir:
+      required: true
+      example: /downloads
+    rename_objects:
+      required: true
+      example: [{"old": "a.txt", "new": "b.txt"}]
+      selector:
+        object:
+
+regex_rename:
+  name: 正则重命名
+  description: 使用正则表达式批量重命名。
+  fields:
+    src_dir:
+      required: true
+      example: /downloads
+    src_name_regex:
+      required: true
+      example: "^file(\\d+)\\.txt$"
+    new_name_regex:
+      required: true
+      example: "renamed_\\1.txt"
+
+move_files:
+  name: 移动文件
+  description: 将文件从源目录移动到目标目录。
+  fields:
+    src_dir:
+      required: true
+      example: /downloads
+    dst_dir:
+      required: true
+      example: /backup
+    names:
+      required: true
+      example: ["a.txt", "b.txt"]
+
+recursive_move:
+  name: 递归移动文件
+  description: 将目录下所有文件递归移动。
+  fields:
+    src_dir:
+      required: true
+      example: /downloads
+    dst_dir:
+      required: true
+      example: /backup
+
+copy_files:
+  name: 复制文件
+  description: 将文件复制到另一个目录。
+  fields:
+    src_dir:
+      required: true
+      example: /downloads
+    dst_dir:
+      required: true
+      example: /backup
+    names:
+      required: true
+      example: ["a.txt", "b.txt"]
+
+remove_files:
+  name: 删除文件
+  description: 删除目录下的指定文件。
+  fields:
+    dir_path:
+      required: true
+      example: /downloads
+    names:
+      required: true
+      example: ["a.txt", "b.txt"]
+
+remove_empty_dir:
+  name: 删除空文件夹
+  description: 删除指定的空目录。
+  fields:
+    src_dir:
+      required: true
+      example: /downloads/tmp
+
+add_offline_download:
+  name: 新建离线下载
+  description: 添加离线下载任务。
+  fields:
+    path:
+      required: true
+      example: /downloads
+    urls:
+      required: true
+      example: ["https://example.com/file.iso"]
+      selector:
+        object:
+    tool:
+      required: true
+      example: "aria2"
+    delete_policy:
+      required: true
+      example: "delete_when_done"
+
+get_archive_meta:
+  name: 获取压缩文件元信息
+  description: 读取压缩包的元信息。
+  fields:
+    path:
+      required: true
+      example: /downloads/archive.zip
+
+list_archive:
+  name: 列出压缩包内容
+  description: 获取压缩包内的文件列表。
+  fields:
+    path:
+      required: true
+      example: /downloads/archive.zip
+    inner_path:
+      required: true
+      example: /
+
+decompress_archive:
+  name: 解压缩文件
+  description: 解压缩包到指定目录。
+  fields:
+    src_dir:
+      required: true
+      example: /downloads
+    dst_dir:
+      required: true
+      example: /downloads/unpack
+    name:
+      required: true
+      example: archive.zip
+    inner_path:
+      required: true
+      example: /
