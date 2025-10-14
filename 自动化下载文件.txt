@@ -1,0 +1,45 @@
+alias: 夸克网盘文件自动下载
+description: 检测到 quark_tv 或 quark_movice 目录有文件，且无未完成任务时，自动下载到 download 目录。
+triggers:
+  - entity_id:
+      - sensor.mu_lu_wen_jian_shu_quark_tv
+      - sensor.mu_lu_wen_jian_shu_quark_movice
+    above: 0
+    trigger: numeric_state
+conditions:
+  - condition: numeric_state
+    entity_id: sensor.yi_dong_wei_wan_cheng_ren_wu
+    below: 1
+actions:
+  - variables:
+      tv_files: "{{ state_attr('sensor.mu_lu_wen_jian_shu_quark_tv', '文件列表') or [] }}"
+      movice_files: "{{ state_attr('sensor.mu_lu_wen_jian_shu_quark_movice', '文件列表') or [] }}"
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ tv_files | count > 0 }}"
+        sequence:
+          - data:
+              src_dir: /quark/tv
+              dst_dir: /download
+              names: "{{ tv_files }}"
+            action: openlist.move_files
+          - delay: "00:00:10"
+          - target:
+              entity_id: sensor.yi_dong_wei_wan_cheng_ren_wu
+            action: homeassistant.update_entity
+            data: {}
+      - conditions:
+          - condition: template
+            value_template: "{{ movice_files | count > 0 }}"
+        sequence:
+          - data:
+              src_dir: /quark/movice
+              dst_dir: /download
+              names: "{{ movice_files }}"
+            action: openlist.move_files
+          - delay: "00:00:10"
+          - target:
+              entity_id: sensor.yi_dong_wei_wan_cheng_ren_wu
+            action: homeassistant.update_entity
+            data: {}

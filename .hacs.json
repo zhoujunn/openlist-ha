@@ -1,0 +1,8 @@
+{
+  "name": "OpenList Integration",
+  "content_in_root": false,
+  "filename": "custom_components/openlist",
+  "domains": ["sensor"],
+  "country": "CN",
+  "render_readme": true
+}

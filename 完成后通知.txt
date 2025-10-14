@@ -1,0 +1,40 @@
+alias: 夸克网盘下载任务完成通知
+description: 当夸克网盘下载任务完成时，根据失败状态发送成功或错误通知邮件
+triggers:
+  - entity_id: sensor.yi_dong_wei_wan_cheng_ren_wu
+    to: "0"
+    trigger: state
+conditions: []
+actions:
+  - choose:
+      - conditions:
+          - condition: numeric_state
+            entity_id: sensor.yi_dong_yi_shi_bai_ren_wu
+            below: 1
+        sequence:
+          - action: notify.163
+            data:
+              title: 夸克网盘下载成功
+              message: ✅ 所有文件已成功下载。
+          - metadata: {}
+            data:
+              message: ✅ 所有文件已成功下载。
+              title: 夸克网盘下载成功
+            action: notify.mobile_app_walterde_iphone_13_pro
+      - conditions:
+          - condition: numeric_state
+            entity_id: sensor.yi_dong_yi_shi_bai_ren_wu
+            above: 0
+        sequence:
+          - action: notify.163
+            data:
+              title: 夸克网盘下载出错
+              message: ⚠️ 下载出现错误，请检查未成功下载的文件。
+          - metadata: {}
+            data:
+              message: ⚠️ 下载出现错误，请检查未成功下载的文件。
+              title: 夸克网盘下载出错
+            action: notify.mobile_app_walterde_iphone_13_pro
+  - action: openlist.clear_succeeded_tasks
+    data:
+      task_type: move
