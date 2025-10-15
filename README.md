@@ -2,6 +2,7 @@ OpenList Home Assistant Integration
 https://img.shields.io/badge/HACS-Custom-orange.svg
 https://img.shields.io/badge/version-0.3.0-blue.svg
 https://img.shields.io/badge/license-MIT-green.svg
+
 V1.0.1
 添加进度传感器，删除部分传感器不必要属性。
 
