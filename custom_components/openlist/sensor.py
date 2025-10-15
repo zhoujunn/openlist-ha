@@ -5,7 +5,7 @@ from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from .const import DOMAIN, TASK_TYPES, SENSOR_TYPE_DONE, SENSOR_TYPE_UNDONE, SENSOR_TYPE_FAILED, SENSOR_TYPE_TRACK_DIR
+from .const import DOMAIN, TASK_TYPES, SENSOR_TYPE_DONE, SENSOR_TYPE_UNDONE, SENSOR_TYPE_FAILED, SENSOR_TYPE_TRACK_DIR, SENSOR_TYPE_PROGRESS
 
 _LOGGER = logging.getLogger(DOMAIN)
 
@@ -33,7 +33,7 @@ async def async_setup_entry(
         # 原有的文件数量传感器
         sensors.append(OpenListFilesSensor(file_coordinator, entry.title))
         
-        # 新增：为每种任务类型创建已完成、未完成和已失败任务传感器
+        # 为每种任务类型创建已完成、未完成、已失败和进度百分比传感器
         for task_type, task_name in TASK_TYPES.items():
             sensors.append(OpenListTaskSensor(
                 task_coordinator, 
@@ -56,8 +56,15 @@ async def async_setup_entry(
                 task_name, 
                 SENSOR_TYPE_FAILED
             ))
+            # 新增：进度百分比传感器
+            sensors.append(OpenListTaskProgressSensor(
+                task_coordinator,
+                entry.title,
+                task_type,
+                task_name
+            ))
         
-        # 新增：为每个跟踪目录创建文件数量传感器
+        # 为每个跟踪目录创建文件数量传感器
         for dir_path, coordinator in track_dirs_coordinators.items():
             sensors.append(OpenListTrackDirSensor(
                 coordinator,
@@ -391,8 +398,8 @@ class OpenListTaskSensor(CoordinatorEntity, Entity):
                 "任务类型": self._task_type,
                 "任务名称": self._task_name,
                 "传感器类型": self._get_sensor_type_name(),
-                "目标状态": self._target_state,  # 显示过滤的状态
-                "任务统计": task_stats,
+                #"目标状态": self._target_state,  # 显示过滤的状态
+                #"任务统计": task_stats,
                 "任务列表": task_details,
                 "更新状态": "成功" if self.coordinator.last_update_success else "失败",
                 "最后更新时间": self._format_timestamp(self._last_updated),
@@ -434,6 +441,211 @@ class OpenListTaskSensor(CoordinatorEntity, Entity):
             return "mdi:progress-clock"
         else:  # SENSOR_TYPE_FAILED
             return "mdi:alert-circle-outline"
+
+    @property
+    def should_poll(self) -> bool:
+        return False
+
+    def _format_timestamp(self, timestamp: float | None) -> str | None:
+        """格式化自定义时间戳"""
+        if timestamp is None:
+            return "从未更新"
+        try:
+            local_time = datetime.fromtimestamp(timestamp)
+            return local_time.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception as err:
+            _LOGGER.error(f"格式化时间失败: {err}")
+            return str(timestamp)
+
+
+class OpenListTaskProgressSensor(CoordinatorEntity, Entity):
+    """OpenList任务进度百分比传感器"""
+    
+    def __init__(self, coordinator, source_name: str, task_type: str, task_name: str):
+        super().__init__(coordinator)
+        self._source_name = source_name
+        self._task_type = task_type
+        self._task_name = task_name
+        
+        # 设置传感器属性
+        self._attr_name = f"{task_name} 已完成进度"
+        self._attr_unique_id = f"{DOMAIN}_{source_name}_{task_type}_progress".replace(
+            ":", "_"
+        ).replace("/", "_").replace(".", "_").replace("-", "_")
+        
+        # 自定义最后更新时间戳
+        self._last_updated: float | None = None
+        
+        _LOGGER.debug(
+            "初始化任务进度传感器: 名称=%s | 唯一ID=%s | 任务类型=%s",
+            self._attr_name, self._attr_unique_id, task_type
+        )
+
+    async def async_added_to_hass(self) -> None:
+        """当传感器添加到HA时调用，注册更新回调"""
+        await super().async_added_to_hass()
+        # 监听协调器更新，记录自定义时间戳
+        self.async_on_remove(
+            self.coordinator.async_add_listener(self._handle_coordinator_update)
+        )
+
+    def _handle_coordinator_update(self) -> None:
+        """协调器数据更新时调用，更新自定义时间戳"""
+        self._last_updated = datetime.now().timestamp()
+        self.async_write_ha_state()
+
+    @property
+    def state(self):
+        """返回传感器状态（进度百分比）"""
+        try:
+            data = self.coordinator.data
+            
+            if not isinstance(data, dict):
+                _LOGGER.warning(f"任务数据格式错误，预期dict，实际{type(data).__name__}")
+                return 0
+            
+            # 获取任务统计数据
+            total_done = data.get(f"{self._task_type}_done", 0)
+            failed_count = data.get(f"{self._task_type}_failed", 0)
+            undone_count = data.get(f"{self._task_type}_undone", 0)
+            
+            # 计算实际完成数（成功任务）
+            actual_done = max(0, total_done - failed_count)
+            
+            # 计算总任务数
+            total_tasks = actual_done + failed_count + undone_count
+            
+            # 计算进度百分比
+            if total_tasks == 0:
+                return 0
+                
+            progress_percent = (actual_done / total_tasks) * 100
+            return round(progress_percent, 1)  # 保留1位小数
+
+        except Exception as err:
+            _LOGGER.error(f"计算任务进度出错: {err}", exc_info=True)
+            return 0
+
+    @property
+    def extra_state_attributes(self):
+        """返回额外状态属性 - 显示任务统计信息"""
+        try:
+            data = self.coordinator.data
+            
+            if not isinstance(data, dict):
+                return {
+                    "状态": "数据无效",
+                    "错误详情": f"预期dict，实际{type(data).__name__}",
+                    "最后更新时间": self._format_timestamp(self._last_updated),
+                    "任务类型": self._task_type,
+                    "任务名称": self._task_name
+                }
+
+            # 计算当前任务类型的统计信息
+            total_done = data.get(f"{self._task_type}_done", 0)
+            failed_count = data.get(f"{self._task_type}_failed", 0)
+            actual_done = max(0, total_done - failed_count)  # 实际完成数
+            undone_count = data.get(f"{self._task_type}_undone", 0)
+            total_tasks = actual_done + failed_count + undone_count
+            
+            # 计算进度百分比
+            progress_percent = (actual_done / total_tasks * 100) if total_tasks > 0 else 0
+
+            task_stats = {
+                "实际完成": actual_done,
+                "已失败": failed_count,
+                "未完成": undone_count,
+                "总计": total_tasks,
+                "原始完成总数": total_done,  # 包含失败的完成总数
+                "进度百分比": f"{progress_percent:.1f}%"
+            }
+
+            # 获取任务详情用于显示
+            task_details = {
+                "已完成": [],
+                "已失败": [],
+                "未完成": []
+            }
+            
+            # 获取已完成任务详情（只显示成功的）
+            done_details = data.get(f"{self._task_type}_done_details", [])
+            if isinstance(done_details, list):
+                task_details["已完成"] = [
+                    {
+                        "id": task.get("id"),
+                        "name": task.get("name"),
+                        "progress": f"{task.get('progress', 0):.1f}%",
+                        "status": task.get("status"),
+                        "state": task.get("state"),
+                        "start_time": task.get("start_time"),
+                        "end_time": task.get("end_time")
+                    } for task in done_details 
+                    if isinstance(task, dict) and task.get("state") == 2
+                ][:5]  # 只显示前5个已完成任务
+            
+            # 获取已失败任务详情
+            failed_details = data.get(f"{self._task_type}_failed_details", [])
+            if isinstance(failed_details, list):
+                task_details["已失败"] = [
+                    {
+                        "id": task.get("id"),
+                        "name": task.get("name"),
+                        "error": task.get("error", ""),
+                        "state": task.get("state"),
+                        "start_time": task.get("start_time"),
+                        "end_time": task.get("end_time")
+                    } for task in failed_details
+                ][:5]  # 只显示前5个失败任务
+            
+            # 获取未完成任务详情
+            undone_details = data.get(f"{self._task_type}_undone_details", [])
+            if isinstance(undone_details, list):
+                task_details["未完成"] = [
+                    {
+                        "id": task.get("id"),
+                        "name": task.get("name"),
+                        "progress": f"{task.get('progress', 0):.1f}%",
+                        "status": task.get("status"),
+                        "state": task.get("state"),
+                        "start_time": task.get("start_time")
+                    } for task in undone_details 
+                    if isinstance(task, dict) and task.get("state") == 1
+                ][:5]  # 只显示前5个未完成任务
+
+            return {
+                "任务类型": self._task_type,
+                "任务名称": self._task_name,
+                "任务统计": task_stats,
+                #"任务详情": task_details,
+                "更新状态": "成功" if self.coordinator.last_update_success else "失败",
+                "最后更新时间": self._format_timestamp(self._last_updated),
+                "传感器可用": self.available
+            }
+
+        except Exception as err:
+            _LOGGER.error(f"获取任务进度属性出错: {err}", exc_info=True)
+            return {
+                "状态": "获取属性失败",
+                "错误信息": str(err),
+                "最后更新时间": self._format_timestamp(self._last_updated),
+                "任务类型": self._task_type,
+                "任务名称": self._task_name
+            }
+
+    @property
+    def available(self) -> bool:
+        return (
+            self.coordinator.last_update_success 
+            and isinstance(self.coordinator.data, dict)
+        )
+
+    @property
+    def icon(self) -> str:
+        return "mdi:progress-check"
+
+    @property
+    def unit_of_measurement(self) -> str:
+        return "%"
 
     @property
     def should_poll(self) -> bool:
