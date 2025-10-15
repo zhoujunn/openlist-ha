@@ -2,6 +2,8 @@ OpenList Home Assistant Integration
 https://img.shields.io/badge/HACS-Custom-orange.svg
 https://img.shields.io/badge/version-0.3.0-blue.svg
 https://img.shields.io/badge/license-MIT-green.svg
+V1.0.1
+添加进度传感器，删除部分传感器不必要属性。
 
 一个用于集成 OpenList/Alist 文件管理系统的 Home Assistant 自定义组件，提供文件监控、任务管理和自动化控制功能。
 
