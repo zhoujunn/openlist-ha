@@ -330,6 +330,7 @@ FILE_SERVICES: list[tuple[str, str, list[str]]] = [
     ("get_file_info",        "async_get_file_info",        ["path"]),
     ("search_files",         "async_search_files",         ["parent", "keywords", "scope"]),
     ("get_dirs",             "async_get_dirs",             []),
+    ("get_tree",             "async_get_tree",             ["path"]),          # ← 新增
     ("batch_rename",         "async_batch_rename",         ["src_dir", "rename_objects"]),
     ("regex_rename",         "async_regex_rename",         ["src_dir", "src_name_regex", "new_name_regex"]),
     ("move_files",           "async_move_files",           ["src_dir", "dst_dir", "names"]),

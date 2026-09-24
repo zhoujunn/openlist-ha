@@ -30,6 +30,7 @@ class OpenListAPI:
             "offline_download_transfer",
             "decompress",
             "decompress_upload",
+            "move",              # ← 新增
         ]
 
     # ------------------------------------------------------------------
@@ -293,6 +294,28 @@ class OpenListAPI:
     async def async_get_public_settings(self) -> Dict[str, Any]:
         """获取公开设置（含版本号等）"""
         return await self.async_request(method="GET", path="/api/public/settings")
+
+    # ------------------------------------------------------------------
+    # 目录树接口
+    # ------------------------------------------------------------------
+    async def async_get_tree(
+        self,
+        path: str = "/",
+        password: str = "",
+        refresh: bool = False,
+    ) -> Dict[str, Any]:
+        """获取指定路径的完整目录树（递归）"""
+        if not path:
+            raise HomeAssistantError("获取目录树需要指定路径")
+        return await self.async_request(
+            method="POST",
+            path="/api/fs/tree",
+            json={
+                "path": path,
+                "password": password,
+                "refresh": refresh,
+            },
+        )
 
     # ------------------------------------------------------------------
     # 任务管理接口

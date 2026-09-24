@@ -7,7 +7,7 @@ CONF_TRACK_DIRS = "track_dirs"
 CONF_UPDATE_INTERVAL = "update_interval"
 
 # 平台（含 button）
-PLATFORMS = ["sensor", "binary_sensor", "button"]   # ← 加 binary_sensor
+PLATFORMS = ["sensor", "binary_sensor", "button"]
 
 
 TASK_TYPES = {
@@ -17,6 +17,7 @@ TASK_TYPES = {
     "offline_download_transfer": "离线下载转存",
     "decompress": "解压",
     "decompress_upload": "解压转存",
+    "move": "移动",              # ← 新增
 }
 
 # 传感器类型

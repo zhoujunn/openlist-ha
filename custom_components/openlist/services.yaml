@@ -429,3 +429,10 @@ decompress_archive:
     inner_path:
       required: true
       example: /
+get_tree:
+  name: 获取目录树
+  description: 递归获取指定目录下的完整文件树结构。
+  fields:
+    path:
+      required: true
+      example: /download
