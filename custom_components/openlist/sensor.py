@@ -1,836 +1,427 @@
 from __future__ import annotations
+
 import logging
 from datetime import datetime
-from homeassistant.helpers.entity import Entity
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from typing import Any
+
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from .const import DOMAIN, TASK_TYPES, SENSOR_TYPE_DONE, SENSOR_TYPE_UNDONE, SENSOR_TYPE_FAILED, SENSOR_TYPE_TRACK_DIR, SENSOR_TYPE_PROGRESS
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
+
+from .const import (
+    DOMAIN, TASK_TYPES,
+    SENSOR_TYPE_DONE, SENSOR_TYPE_UNDONE, SENSOR_TYPE_FAILED,
+)
 
 _LOGGER = logging.getLogger(DOMAIN)
 
-async def async_setup_entry(
-    hass: HomeAssistant,
-    entry,
-    async_add_entities: AddEntitiesCallback
-) -> None:
-    """从配置项设置传感器实体"""
-    _LOGGER.debug("开始设置OpenList传感器")
-    try:
-        data = hass.data[DOMAIN][entry.entry_id]
-        file_coordinator = data["file_coordinator"]
-        task_coordinator = data["task_coordinator"]
-        track_dirs_coordinators = data.get("track_dirs_coordinators", {})
-        track_dirs = data.get("track_dirs", [])
-        
-        if not file_coordinator or not task_coordinator:
-            _LOGGER.error("无法获取协调器实例，传感器设置失败")
-            return
-        
-        # 创建传感器实体列表
-        sensors = []
-        
-        # 原有的文件数量传感器
-        sensors.append(OpenListFilesSensor(file_coordinator, entry.title))
-        
-        # 为每种任务类型创建已完成、未完成、已失败和进度百分比传感器
-        for task_type, task_name in TASK_TYPES.items():
-            sensors.append(OpenListTaskSensor(
-                task_coordinator, 
-                entry.title, 
-                task_type, 
-                task_name, 
-                SENSOR_TYPE_DONE
-            ))
-            sensors.append(OpenListTaskSensor(
-                task_coordinator,
-                entry.title,
-                task_type,
-                task_name, 
-                SENSOR_TYPE_UNDONE
-            ))
-            sensors.append(OpenListTaskSensor(
-                task_coordinator,
-                entry.title,
-                task_type,
-                task_name, 
-                SENSOR_TYPE_FAILED
-            ))
-            # 新增：进度百分比传感器
-            sensors.append(OpenListTaskProgressSensor(
-                task_coordinator,
-                entry.title,
-                task_type,
-                task_name
-            ))
-        
-        # 为每个跟踪目录创建文件数量传感器
-        for dir_path, coordinator in track_dirs_coordinators.items():
-            sensors.append(OpenListTrackDirSensor(
-                coordinator,
-                entry.title,
-                dir_path
-            ))
-            
-        async_add_entities(sensors, update_before_add=True)
-        _LOGGER.debug("OpenList传感器设置完成，共创建%d个传感器", len(sensors))
-        _LOGGER.debug("跟踪目录传感器: %s", [dir_path for dir_path in track_dirs])
-        
-    except Exception as err:
-        _LOGGER.error("传感器设置过程出错: %s", str(err), exc_info=True)
 
+# ---------------------------------------------------------------------------
+# 通用基类
+# ---------------------------------------------------------------------------
+class _OpenListBaseSensor(CoordinatorEntity, Entity):
+    _attr_should_poll = False
+    _attr_has_entity_name = False
 
-class OpenListFilesSensor(CoordinatorEntity, Entity):
-    """OpenList根目录文件数量传感器（原有传感器）"""
-    
-    def __init__(self, coordinator, name: str):
+    def __init__(self, coordinator) -> None:
         super().__init__(coordinator)
-        self._source_name = name
-        self._attr_name = f"根目录文件数"
-        self._attr_unique_id = f"{DOMAIN}_{name}_root_files".replace(
-            ":", "_"
-        ).replace("/", "_").replace(".", "_").replace("-", "_")
-        # 自定义最后更新时间戳
         self._last_updated: float | None = None
-        
-        _LOGGER.debug(
-            "初始化文件传感器: 名称=%s | 唯一ID=%s",
-            self._attr_name, self._attr_unique_id
-        )
-
-    async def async_added_to_hass(self) -> None:
-        """当传感器添加到HA时调用，注册更新回调"""
-        await super().async_added_to_hass()
-        # 监听协调器更新，记录自定义时间戳
-        self.async_on_remove(
-            self.coordinator.async_add_listener(self._handle_coordinator_update)
-        )
 
     def _handle_coordinator_update(self) -> None:
-        """协调器数据更新时调用，更新自定义时间戳"""
         self._last_updated = datetime.now().timestamp()
-        self.async_write_ha_state()
-
-    @property
-    def state(self):
-        """返回传感器状态（文件数量）"""
-        try:
-            data = self.coordinator.data
-            _LOGGER.debug(f"文件传感器原始数据: {str(data)[:500]}")
-
-            if isinstance(data, dict) and data.get("code") == 401:
-                _LOGGER.warning(f"认证失败: {data.get('message')}")
-                return -1
-
-            if not isinstance(data, dict):
-                _LOGGER.warning(f"数据格式错误，预期dict，实际{type(data).__name__}")
-                return 0
-
-            api_data = data.get("data")
-            if api_data is None:
-                _LOGGER.warning("缺少'data'字段")
-                return 0
-
-            if not isinstance(api_data, dict):
-                _LOGGER.warning(f"'data'不是字典，实际{type(api_data).__name__}")
-                return 0
-
-            content = api_data.get("content", [])
-            if not isinstance(content, list):
-                content = []
-
-            return len(content)
-
-        except Exception as err:
-            _LOGGER.error(f"计算文件状态出错: {err}", exc_info=True)
-            return 0
-
-    @property
-    def extra_state_attributes(self):
-        """返回额外状态属性"""
-        try:
-            data = self.coordinator.data
-            _LOGGER.debug(f"提取文件属性数据: {str(data)[:500]}")
-
-            if not isinstance(data, dict):
-                return {
-                    "状态": "数据无效",
-                    "错误详情": f"预期dict，实际{type(data).__name__}",
-                    "最后更新时间": self._format_timestamp(self._last_updated)
-                }
-
-            if data.get("code") == 401:
-                return {
-                    "状态": "认证失败",
-                    "错误详情": data.get("message", "未知错误"),
-                    "最后更新时间": self._format_timestamp(self._last_updated)
-                }
-
-            api_data = data.get("data")
-            if api_data is None:
-                return {
-                    "状态": "数据不完整",
-                    "错误详情": "缺少'data'字段",
-                    "最后更新时间": self._format_timestamp(self._last_updated)
-                }
-
-            if not isinstance(api_data, dict):
-                return {
-                    "状态": "数据格式错误",
-                    "错误详情": f"'data'不是字典，实际{type(api_data).__name__}",
-                    "最后更新时间": self._format_timestamp(self._last_updated)
-                }
-
-            content = api_data.get("content", [])
-            if not isinstance(content, list):
-                content = []
-
-            file_names = [
-                item.get("name") 
-                for item in content
-                if isinstance(item, dict) and "name" in item
-            ]
-
-            modified_times = [
-                item.get("modified") 
-                for item in content 
-                if isinstance(item, dict) and "modified" in item and item["modified"]
-            ]
-            latest_modified = max(modified_times) if modified_times else None
-
-            return {
-                "文件列表": file_names,
-                "文件总数": len(content),
-                "最新修改时间": latest_modified,
-                "更新状态": "成功" if self.coordinator.last_update_success else "失败",
-                "最后更新时间": self._format_timestamp(self._last_updated),
-                "传感器可用": self.available
-            }
-
-        except Exception as err:
-            _LOGGER.error(f"获取文件属性出错: {err}", exc_info=True)
-            return {
-                "状态": "获取属性失败",
-                "错误信息": str(err),
-                "最后更新时间": self._format_timestamp(self._last_updated)
-            }
+        super()._handle_coordinator_update()
 
     @property
     def available(self) -> bool:
-        return (
-            self.coordinator.last_update_success 
-            and isinstance(self.coordinator.data, dict)
-            and self.coordinator.data.get("code") != 401
-        )
+        if not self.coordinator.last_update_success:
+            return False
+        data = self.coordinator.data
+        return isinstance(data, dict) and data.get("code") != 401
 
-    @property
-    def icon(self) -> str:
-        return "mdi:folder-file"
-
-    @property
-    def should_poll(self) -> bool:
-        return False
-
-    def _format_timestamp(self, timestamp: float | None) -> str | None:
-        """格式化自定义时间戳"""
-        if timestamp is None:
+    def _format_timestamp(self, ts: float | None) -> str:
+        if ts is None:
             return "从未更新"
         try:
-            local_time = datetime.fromtimestamp(timestamp)
-            return local_time.strftime("%Y-%m-%d %H:%M:%S")
-        except Exception as err:
-            _LOGGER.error(f"格式化时间失败: {err}")
-            return str(timestamp)
+            return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:  # noqa: BLE001
+            return str(ts)
+
+    @staticmethod
+    def _safety_key(s: str) -> str:
+        return s.replace(":", "_").replace("/", "_").replace(".", "_").replace("-", "_")
 
 
-class OpenListTaskSensor(CoordinatorEntity, Entity):
-    """OpenList任务数量传感器"""
-    
-    def __init__(self, coordinator, source_name: str, task_type: str, task_name: str, sensor_type: str):
+# ---------------------------------------------------------------------------
+# 根目录文件数传感器
+# ---------------------------------------------------------------------------
+class OpenListFilesSensor(_OpenListBaseSensor):
+    _attr_icon = "mdi:folder-file"
+
+    def __init__(self, coordinator, name: str) -> None:
         super().__init__(coordinator)
-        self._source_name = source_name
+        self._attr_name = "根目录文件数"
+        self._attr_unique_id = self._safety_key(f"{DOMAIN}_{name}_root_files")
+
+    def _get_content(self) -> list | None:
+        data = self.coordinator.data
+        if not isinstance(data, dict) or data.get("code") == 401:
+            return None
+        api_data = data.get("data")
+        if not isinstance(api_data, dict):
+            return None
+        content = api_data.get("content", [])
+        return content if isinstance(content, list) else []
+
+    @property
+    def state(self) -> int:
+        content = self._get_content()
+        return len(content) if content is not None else 0
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        content = self._get_content()
+        if content is None:
+            return {"状态": "数据无效",
+                    "最后更新时间": self._format_timestamp(self._last_updated)}
+        file_names = [i.get("name") for i in content if isinstance(i, dict) and "name" in i]
+        modified = [i.get("modified") for i in content
+                    if isinstance(i, dict) and i.get("modified")]
+        return {
+            "文件列表": file_names[:50],
+            "文件总数": len(content),
+            "最新修改时间": max(modified) if modified else None,
+            "最后更新时间": self._format_timestamp(self._last_updated),
+        }
+
+
+# ---------------------------------------------------------------------------
+# 任务数量传感器
+# ---------------------------------------------------------------------------
+class OpenListTaskSensor(_OpenListBaseSensor):
+
+    def __init__(self, coordinator, source_name: str, task_type: str,
+                 task_name: str, sensor_type: str) -> None:
+        super().__init__(coordinator)
         self._task_type = task_type
         self._task_name = task_name
         self._sensor_type = sensor_type
-        
-        # 设置传感器属性
+
         if sensor_type == SENSOR_TYPE_DONE:
             self._attr_name = f"{task_name} 已完成任务"
             self._state_key = f"{task_type}_done"
             self._details_key = f"{task_type}_done_details"
-            self._failed_key = f"{task_type}_failed"  # 用于计算实际完成数量
-            self._target_state = 2  # 已完成任务的状态为2
+            self._attr_icon = "mdi:check-circle-outline"
         elif sensor_type == SENSOR_TYPE_UNDONE:
-            self._attr_name = f"{task_name} 未完成任务" 
+            self._attr_name = f"{task_name} 未完成任务"
             self._state_key = f"{task_type}_undone"
             self._details_key = f"{task_type}_undone_details"
-            self._target_state = 1  # 未完成任务的状态为1
-        else:  # SENSOR_TYPE_FAILED
+            self._attr_icon = "mdi:progress-clock"
+        else:
             self._attr_name = f"{task_name} 已失败任务"
             self._state_key = f"{task_type}_failed"
             self._details_key = f"{task_type}_failed_details"
-            self._target_state = None  # 失败任务没有固定状态值，通过其他方式筛选
-            
-        self._attr_unique_id = f"{DOMAIN}_{source_name}_{task_type}_{sensor_type}".replace(
-            ":", "_"
-        ).replace("/", "_").replace(".", "_").replace("-", "_")
-        
-        # 自定义最后更新时间戳
-        self._last_updated: float | None = None
-        
-        _LOGGER.debug(
-            "初始化任务传感器: 名称=%s | 唯一ID=%s | 任务类型=%s | 传感器类型=%s | 目标状态=%s",
-            self._attr_name, self._attr_unique_id, task_type, sensor_type, self._target_state
-        )
+            self._attr_icon = "mdi:alert-circle-outline"
 
-    async def async_added_to_hass(self) -> None:
-        """当传感器添加到HA时调用，注册更新回调"""
-        await super().async_added_to_hass()
-        # 监听协调器更新，记录自定义时间戳
-        self.async_on_remove(
-            self.coordinator.async_add_listener(self._handle_coordinator_update)
+        self._attr_unique_id = self._safety_key(
+            f"{DOMAIN}_{source_name}_{task_type}_{sensor_type}"
         )
-
-    def _handle_coordinator_update(self) -> None:
-        """协调器数据更新时调用，更新自定义时间戳"""
-        self._last_updated = datetime.now().timestamp()
-        self.async_write_ha_state()
 
     @property
-    def state(self):
-        """返回传感器状态（任务数量）"""
-        try:
-            data = self.coordinator.data
-            
-            if not isinstance(data, dict):
-                _LOGGER.warning(f"任务数据格式错误，预期dict，实际{type(data).__name__}")
-                return 0
-            
-            if self._sensor_type == SENSOR_TYPE_DONE:
-                # 已完成任务数量 = 总完成数 - 失败数
-                total_done = data.get(self._state_key, 0)
-                failed_count = data.get(self._failed_key, 0)
-                actual_done = total_done - failed_count
-                
-                if not isinstance(total_done, int) or not isinstance(failed_count, int):
-                    _LOGGER.warning(f"任务数量不是整数: 总完成={total_done}, 失败={failed_count}")
-                    return 0
-                    
-                return max(0, actual_done)  # 确保不会出现负数
-            else:
-                count = data.get(self._state_key, 0)
-                if not isinstance(count, int):
-                    _LOGGER.warning(f"任务数量不是整数: {count}")
-                    return 0
-                    
-                return count
-
-        except Exception as err:
-            _LOGGER.error(f"计算任务状态出错: {err}", exc_info=True)
+    def state(self) -> int:
+        data = self.coordinator.data
+        if not isinstance(data, dict):
             return 0
 
-    @property
-    def extra_state_attributes(self):
-        """返回额外状态属性 - 只显示当前任务类型的信息，并过滤状态"""
-        try:
-            data = self.coordinator.data
-            
-            if not isinstance(data, dict):
-                return {
-                    "状态": "数据无效",
-                    "错误详情": f"预期dict，实际{type(data).__name__}",
-                    "最后更新时间": self._format_timestamp(self._last_updated),
-                    "任务类型": self._task_type,
-                    "任务名称": self._task_name,
-                    "传感器类型": self._get_sensor_type_name()
-                }
-
-            # 计算当前任务类型的统计信息
-            total_done = data.get(f"{self._task_type}_done", 0)
-            failed_count = data.get(f"{self._task_type}_failed", 0)
-            actual_done = max(0, total_done - failed_count)  # 实际完成数
-            undone_count = data.get(f"{self._task_type}_undone", 0)
-            
-            task_stats = {
-                "实际完成": actual_done,
-                "已失败": failed_count,
-                "未完成": undone_count,
-                "总计": actual_done + failed_count + undone_count,
-                "原始完成总数": total_done  # 新增：显示原始完成总数（包含失败）
-            }
-
-            # 获取当前任务类型的详细信息
-            task_details = []
-            details_data = data.get(self._details_key, [])
-            
-            if isinstance(details_data, list):
-                if self._sensor_type == SENSOR_TYPE_FAILED:
-                    # 对于失败任务，直接使用已筛选好的数据
-                    filtered_tasks = details_data
-                elif self._sensor_type == SENSOR_TYPE_DONE:
-                    # 对于已完成任务，只显示状态为2的成功任务
-                    filtered_tasks = [
-                        task for task in details_data 
-                        if isinstance(task, dict) and task.get("state") == 2
-                    ]
-                else:  # SENSOR_TYPE_UNDONE
-                    # 对于未完成任务，过滤状态为1的任务
-                    filtered_tasks = [
-                        task for task in details_data 
-                        if isinstance(task, dict) and task.get("state") == 1
-                    ]
-                
-                task_details = [
-                    {
-                        "id": task.get("id"),
-                        "name": task.get("name"),
-                        "progress": f"{task.get('progress', 0):.1f}%",
-                        "status": task.get("status"),
-                        "state": task.get("state"),  # 显示状态值
-                        "start_time": task.get("start_time"),
-                        "end_time": task.get("end_time") if self._sensor_type in [SENSOR_TYPE_DONE, SENSOR_TYPE_FAILED] else None,
-                        "total_bytes": task.get("total_bytes"),
-                        "error": task.get("error", "")
-                    } for task in filtered_tasks[:20]  # 显示前20个任务，避免属性过大
-                ]
-
-            return {
-                "任务类型": self._task_type,
-                "任务名称": self._task_name,
-                "传感器类型": self._get_sensor_type_name(),
-                #"目标状态": self._target_state,  # 显示过滤的状态
-                #"任务统计": task_stats,
-                "任务列表": task_details,
-                "更新状态": "成功" if self.coordinator.last_update_success else "失败",
-                "最后更新时间": self._format_timestamp(self._last_updated),
-                "传感器可用": self.available
-            }
-
-        except Exception as err:
-            _LOGGER.error(f"获取任务属性出错: {err}", exc_info=True)
-            return {
-                "状态": "获取属性失败",
-                "错误信息": str(err),
-                "最后更新时间": self._format_timestamp(self._last_updated),
-                "任务类型": self._task_type,
-                "任务名称": self._task_name,
-                "传感器类型": self._get_sensor_type_name()
-            }
-
-    def _get_sensor_type_name(self):
-        """获取传感器类型名称"""
         if self._sensor_type == SENSOR_TYPE_DONE:
-            return "已完成"
-        elif self._sensor_type == SENSOR_TYPE_UNDONE:
-            return "未完成"
-        else:  # SENSOR_TYPE_FAILED
-            return "已失败"
+            total = data.get(f"{self._task_type}_done", 0)
+            failed = data.get(f"{self._task_type}_failed", 0)
+            if not isinstance(total, int) or not isinstance(failed, int):
+                return 0
+            return max(0, total - failed)
+
+        val = data.get(self._state_key, 0)
+        return val if isinstance(val, int) else 0
 
     @property
-    def available(self) -> bool:
-        return (
-            self.coordinator.last_update_success 
-            and isinstance(self.coordinator.data, dict)
-        )
+    def extra_state_attributes(self) -> dict[str, Any]:
+        data = self.coordinator.data
+        if not isinstance(data, dict):
+            return {"任务类型": self._task_type, "任务名称": self._task_name,
+                    "最后更新时间": self._format_timestamp(self._last_updated)}
 
-    @property
-    def icon(self) -> str:
-        if self._sensor_type == SENSOR_TYPE_DONE:
-            return "mdi:check-circle-outline"
-        elif self._sensor_type == SENSOR_TYPE_UNDONE:
-            return "mdi:progress-clock"
-        else:  # SENSOR_TYPE_FAILED
-            return "mdi:alert-circle-outline"
+        details = data.get(self._details_key, [])
+        filtered: list[dict] = []
+        if isinstance(details, list):
+            if self._sensor_type == SENSOR_TYPE_FAILED:
+                filtered = [t for t in details if isinstance(t, dict)]
+            elif self._sensor_type == SENSOR_TYPE_DONE:
+                filtered = [t for t in details if isinstance(t, dict) and t.get("state") == 2]
+            else:
+                filtered = [t for t in details if isinstance(t, dict) and t.get("state") == 1]
 
-    @property
-    def should_poll(self) -> bool:
-        return False
+        task_list = [
+            {
+                "id": t.get("id"),
+                "name": t.get("name"),
+                "progress": f"{t.get('progress', 0):.1f}%",
+                "state": t.get("state"),
+                "start_time": t.get("start_time"),
+                "end_time": t.get("end_time"),
+                "error": t.get("error", ""),
+            }
+            for t in filtered[:10]
+        ]
 
-    def _format_timestamp(self, timestamp: float | None) -> str | None:
-        """格式化自定义时间戳"""
-        if timestamp is None:
-            return "从未更新"
-        try:
-            local_time = datetime.fromtimestamp(timestamp)
-            return local_time.strftime("%Y-%m-%d %H:%M:%S")
-        except Exception as err:
-            _LOGGER.error(f"格式化时间失败: {err}")
-            return str(timestamp)
+        return {
+            "任务类型": self._task_type,
+            "任务名称": self._task_name,
+            "传感器类型": self._sensor_type,
+            "任务列表": task_list,
+            "任务数量": len(filtered),
+            "最后更新时间": self._format_timestamp(self._last_updated),
+        }
 
 
-class OpenListTaskProgressSensor(CoordinatorEntity, Entity):
-    """OpenList任务进度百分比传感器"""
-    
-    def __init__(self, coordinator, source_name: str, task_type: str, task_name: str):
+# ---------------------------------------------------------------------------
+# 进度百分比传感器
+# ---------------------------------------------------------------------------
+class OpenListTaskProgressSensor(_OpenListBaseSensor):
+    _attr_icon = "mdi:progress-check"
+    _attr_unit_of_measurement = "%"
+
+    def __init__(self, coordinator, source_name: str, task_type: str, task_name: str) -> None:
         super().__init__(coordinator)
-        self._source_name = source_name
         self._task_type = task_type
         self._task_name = task_name
-        
-        # 设置传感器属性
         self._attr_name = f"{task_name} 已完成进度"
-        self._attr_unique_id = f"{DOMAIN}_{source_name}_{task_type}_progress".replace(
-            ":", "_"
-        ).replace("/", "_").replace(".", "_").replace("-", "_")
-        
-        # 自定义最后更新时间戳
-        self._last_updated: float | None = None
-        
-        _LOGGER.debug(
-            "初始化任务进度传感器: 名称=%s | 唯一ID=%s | 任务类型=%s",
-            self._attr_name, self._attr_unique_id, task_type
+        self._attr_unique_id = self._safety_key(
+            f"{DOMAIN}_{source_name}_{task_type}_progress"
         )
 
-    async def async_added_to_hass(self) -> None:
-        """当传感器添加到HA时调用，注册更新回调"""
-        await super().async_added_to_hass()
-        # 监听协调器更新，记录自定义时间戳
-        self.async_on_remove(
-            self.coordinator.async_add_listener(self._handle_coordinator_update)
-        )
-
-    def _handle_coordinator_update(self) -> None:
-        """协调器数据更新时调用，更新自定义时间戳"""
-        self._last_updated = datetime.now().timestamp()
-        self.async_write_ha_state()
-
-    @property
-    def state(self):
-        """返回传感器状态（进度百分比）"""
-        try:
-            data = self.coordinator.data
-            
-            if not isinstance(data, dict):
-                _LOGGER.warning(f"任务数据格式错误，预期dict，实际{type(data).__name__}")
-                return 0
-            
-            # 获取任务统计数据
-            total_done = data.get(f"{self._task_type}_done", 0)
-            failed_count = data.get(f"{self._task_type}_failed", 0)
-            undone_count = data.get(f"{self._task_type}_undone", 0)
-            
-            # 计算实际完成数（成功任务）
-            actual_done = max(0, total_done - failed_count)
-            
-            # 计算总任务数
-            total_tasks = actual_done + failed_count + undone_count
-            
-            # 计算进度百分比
-            if total_tasks == 0:
-                return 0
-                
-            progress_percent = (actual_done / total_tasks) * 100
-            return round(progress_percent, 1)  # 保留1位小数
-
-        except Exception as err:
-            _LOGGER.error(f"计算任务进度出错: {err}", exc_info=True)
-            return 0
+    def _calc(self) -> tuple[float, dict[str, int]]:
+        data = self.coordinator.data or {}
+        if not isinstance(data, dict):
+            return 0.0, {"实际完成": 0, "已失败": 0, "未完成": 0, "总计": 0}
+        total = data.get(f"{self._task_type}_done", 0) or 0
+        failed = data.get(f"{self._task_type}_failed", 0) or 0
+        undone = data.get(f"{self._task_type}_undone", 0) or 0
+        done = max(0, total - failed)
+        grand = done + failed + undone
+        pct = round(done / grand * 100, 1) if grand else 0.0
+        return pct, {"实际完成": done, "已失败": failed, "未完成": undone, "总计": grand}
 
     @property
-    def extra_state_attributes(self):
-        """返回额外状态属性 - 显示任务统计信息"""
-        try:
-            data = self.coordinator.data
-            
-            if not isinstance(data, dict):
-                return {
-                    "状态": "数据无效",
-                    "错误详情": f"预期dict，实际{type(data).__name__}",
-                    "最后更新时间": self._format_timestamp(self._last_updated),
-                    "任务类型": self._task_type,
-                    "任务名称": self._task_name
-                }
-
-            # 计算当前任务类型的统计信息
-            total_done = data.get(f"{self._task_type}_done", 0)
-            failed_count = data.get(f"{self._task_type}_failed", 0)
-            actual_done = max(0, total_done - failed_count)  # 实际完成数
-            undone_count = data.get(f"{self._task_type}_undone", 0)
-            total_tasks = actual_done + failed_count + undone_count
-            
-            # 计算进度百分比
-            progress_percent = (actual_done / total_tasks * 100) if total_tasks > 0 else 0
-
-            task_stats = {
-                "实际完成": actual_done,
-                "已失败": failed_count,
-                "未完成": undone_count,
-                "总计": total_tasks,
-                "原始完成总数": total_done,  # 包含失败的完成总数
-                "进度百分比": f"{progress_percent:.1f}%"
-            }
-
-            # 获取任务详情用于显示
-            task_details = {
-                "已完成": [],
-                "已失败": [],
-                "未完成": []
-            }
-            
-            # 获取已完成任务详情（只显示成功的）
-            done_details = data.get(f"{self._task_type}_done_details", [])
-            if isinstance(done_details, list):
-                task_details["已完成"] = [
-                    {
-                        "id": task.get("id"),
-                        "name": task.get("name"),
-                        "progress": f"{task.get('progress', 0):.1f}%",
-                        "status": task.get("status"),
-                        "state": task.get("state"),
-                        "start_time": task.get("start_time"),
-                        "end_time": task.get("end_time")
-                    } for task in done_details 
-                    if isinstance(task, dict) and task.get("state") == 2
-                ][:5]  # 只显示前5个已完成任务
-            
-            # 获取已失败任务详情
-            failed_details = data.get(f"{self._task_type}_failed_details", [])
-            if isinstance(failed_details, list):
-                task_details["已失败"] = [
-                    {
-                        "id": task.get("id"),
-                        "name": task.get("name"),
-                        "error": task.get("error", ""),
-                        "state": task.get("state"),
-                        "start_time": task.get("start_time"),
-                        "end_time": task.get("end_time")
-                    } for task in failed_details
-                ][:5]  # 只显示前5个失败任务
-            
-            # 获取未完成任务详情
-            undone_details = data.get(f"{self._task_type}_undone_details", [])
-            if isinstance(undone_details, list):
-                task_details["未完成"] = [
-                    {
-                        "id": task.get("id"),
-                        "name": task.get("name"),
-                        "progress": f"{task.get('progress', 0):.1f}%",
-                        "status": task.get("status"),
-                        "state": task.get("state"),
-                        "start_time": task.get("start_time")
-                    } for task in undone_details 
-                    if isinstance(task, dict) and task.get("state") == 1
-                ][:5]  # 只显示前5个未完成任务
-
-            return {
-                "任务类型": self._task_type,
-                "任务名称": self._task_name,
-                "任务统计": task_stats,
-                #"任务详情": task_details,
-                "更新状态": "成功" if self.coordinator.last_update_success else "失败",
-                "最后更新时间": self._format_timestamp(self._last_updated),
-                "传感器可用": self.available
-            }
-
-        except Exception as err:
-            _LOGGER.error(f"获取任务进度属性出错: {err}", exc_info=True)
-            return {
-                "状态": "获取属性失败",
-                "错误信息": str(err),
-                "最后更新时间": self._format_timestamp(self._last_updated),
-                "任务类型": self._task_type,
-                "任务名称": self._task_name
-            }
+    def state(self) -> float:
+        return self._calc()[0]
 
     @property
-    def available(self) -> bool:
-        return (
-            self.coordinator.last_update_success 
-            and isinstance(self.coordinator.data, dict)
-        )
-
-    @property
-    def icon(self) -> str:
-        return "mdi:progress-check"
-
-    @property
-    def unit_of_measurement(self) -> str:
-        return "%"
-
-    @property
-    def should_poll(self) -> bool:
-        return False
-
-    def _format_timestamp(self, timestamp: float | None) -> str | None:
-        """格式化自定义时间戳"""
-        if timestamp is None:
-            return "从未更新"
-        try:
-            local_time = datetime.fromtimestamp(timestamp)
-            return local_time.strftime("%Y-%m-%d %H:%M:%S")
-        except Exception as err:
-            _LOGGER.error(f"格式化时间失败: {err}")
-            return str(timestamp)
+    def extra_state_attributes(self) -> dict[str, Any]:
+        pct, stats = self._calc()
+        stats["进度百分比"] = f"{pct:.1f}%"
+        return {
+            "任务类型": self._task_type,
+            "任务名称": self._task_name,
+            "任务统计": stats,
+            "最后更新时间": self._format_timestamp(self._last_updated),
+        }
 
 
-class OpenListTrackDirSensor(CoordinatorEntity, Entity):
-    """OpenList跟踪目录文件数量传感器"""
-    
-    def __init__(self, coordinator, source_name: str, dir_path: str):
+# ---------------------------------------------------------------------------
+# 跟踪目录传感器
+# ---------------------------------------------------------------------------
+class OpenListTrackDirSensor(_OpenListBaseSensor):
+    _attr_icon = "mdi:folder-search"
+
+    def __init__(self, coordinator, source_name: str, dir_path: str) -> None:
         super().__init__(coordinator)
-        self._source_name = source_name
         self._dir_path = dir_path
-        
-        # 设置传感器属性
         self._attr_name = f"目录文件数: {dir_path}"
-        self._attr_unique_id = f"{DOMAIN}_{source_name}_track_dir_{dir_path.replace('/', '_')}".replace(
-            ":", "_"
-        ).replace(".", "_").replace("-", "_")
-        
-        # 自定义最后更新时间戳
-        self._last_updated: float | None = None
-        
-        _LOGGER.debug(
-            "初始化跟踪目录传感器: 名称=%s | 唯一ID=%s | 目录路径=%s",
-            self._attr_name, self._attr_unique_id, dir_path
+        self._attr_unique_id = self._safety_key(
+            f"{DOMAIN}_{source_name}_track_dir_{dir_path}"
         )
 
-    async def async_added_to_hass(self) -> None:
-        """当传感器添加到HA时调用，注册更新回调"""
-        await super().async_added_to_hass()
-        # 监听协调器更新，记录自定义时间戳
-        self.async_on_remove(
-            self.coordinator.async_add_listener(self._handle_coordinator_update)
-        )
-
-    def _handle_coordinator_update(self) -> None:
-        """协调器数据更新时调用，更新自定义时间戳"""
-        self._last_updated = datetime.now().timestamp()
-        self.async_write_ha_state()
+    def _get_content(self) -> list | None:
+        data = self.coordinator.data
+        if not isinstance(data, dict) or data.get("code") == 401:
+            return None
+        api_data = data.get("data")
+        if not isinstance(api_data, dict):
+            return None
+        content = api_data.get("content", [])
+        return content if isinstance(content, list) else []
 
     @property
-    def state(self):
-        """返回传感器状态（文件数量）"""
-        try:
-            data = self.coordinator.data
-            _LOGGER.debug(f"跟踪目录传感器原始数据 [目录: {self._dir_path}]: {str(data)[:500]}")
+    def state(self) -> int:
+        content = self._get_content()
+        return len(content) if content is not None else 0
 
-            if isinstance(data, dict) and data.get("code") == 401:
-                _LOGGER.warning(f"认证失败 [目录: {self._dir_path}]: {data.get('message')}")
-                return -1
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        content = self._get_content()
+        if content is None:
+            return {"目录路径": self._dir_path,
+                    "最后更新时间": self._format_timestamp(self._last_updated)}
+        file_names = [i.get("name") for i in content if isinstance(i, dict) and "name" in i]
+        modified = [i.get("modified") for i in content
+                    if isinstance(i, dict) and i.get("modified")]
+        return {
+            "目录路径": self._dir_path,
+            "文件列表": file_names[:50],
+            "文件总数": len(content),
+            "最新修改时间": max(modified) if modified else None,
+            "最后更新时间": self._format_timestamp(self._last_updated),
+        }
 
-            if not isinstance(data, dict):
-                _LOGGER.warning(f"数据格式错误 [目录: {self._dir_path}]，预期dict，实际{type(data).__name__}")
-                return 0
 
-            api_data = data.get("data")
-            if api_data is None:
-                _LOGGER.warning(f"缺少'data'字段 [目录: {self._dir_path}]")
-                return 0
+# ---------------------------------------------------------------------------
+# 存储状态传感器
+# ---------------------------------------------------------------------------
+class OpenListStorageSensor(_OpenListBaseSensor):
+    """监控单个存储挂载点的在线/离线状态。"""
 
-            if not isinstance(api_data, dict):
-                _LOGGER.warning(f"'data'不是字典 [目录: {self._dir_path}]，实际{type(api_data).__name__}")
-                return 0
+    _attr_icon = "mdi:harddisk"
 
-            content = api_data.get("content", [])
-            if not isinstance(content, list):
-                content = []
+    def __init__(self, coordinator, source_name: str, storage: dict) -> None:
+        super().__init__(coordinator)
+        self._storage_id = storage.get("id")
+        self._mount_path = storage.get("mount_path") or "/"
+        self._driver = storage.get("driver", "unknown")
 
-            return len(content)
+        self._attr_name = f"存储状态: {self._mount_path}"
+        self._attr_unique_id = self._safety_key(
+            f"{DOMAIN}_{source_name}_storage_{self._mount_path}"
+        )
 
-        except Exception as err:
-            _LOGGER.error(f"计算跟踪目录状态出错 [目录: {self._dir_path}]: {err}", exc_info=True)
+    def _find_storage(self) -> dict | None:
+        data = self.coordinator.data
+        if not isinstance(data, dict):
+            return None
+        storages = data.get("data", [])
+        if not isinstance(storages, list):
+            return None
+        for s in storages:
+            if isinstance(s, dict) and s.get("id") == self._storage_id:
+                return s
+        return None
+
+    @property
+    def state(self) -> str:
+        s = self._find_storage()
+        if not s:
+            return "unknown"
+        status = (s.get("status") or "").lower()
+        return "online" if status in ("work", "working", "ok") else "offline"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        s = self._find_storage() or {}
+        return {
+            "挂载路径": self._mount_path,
+            "驱动类型": s.get("driver", self._driver),
+            "状态": s.get("status"),
+            "禁用": s.get("disabled", False),
+            "排序": s.get("order"),
+            "最后更新时间": self._format_timestamp(self._last_updated),
+        }
+
+
+# ---------------------------------------------------------------------------
+# 存储数量汇总传感器
+# ---------------------------------------------------------------------------
+class OpenListStorageCountSensor(_OpenListBaseSensor):
+    """始终创建的诊断传感器，显示存储挂载点数量。"""
+    _attr_icon = "mdi:database"
+
+    def __init__(self, coordinator, source_name: str) -> None:
+        super().__init__(coordinator)
+        self._attr_name = "存储数量"
+        self._attr_unique_id = self._safety_key(
+            f"{DOMAIN}_{source_name}_storage_count"
+        )
+
+    @property
+    def state(self) -> int:
+        data = self.coordinator.data
+        if not isinstance(data, dict):
             return 0
+        storages = data.get("data", [])
+        return len(storages) if isinstance(storages, list) else 0
 
     @property
-    def extra_state_attributes(self):
-        """返回额外状态属性"""
-        try:
-            data = self.coordinator.data
-            _LOGGER.debug(f"提取跟踪目录属性数据 [目录: {self._dir_path}]: {str(data)[:500]}")
+    def extra_state_attributes(self) -> dict[str, Any]:
+        attrs: dict[str, Any] = {
+            "最后更新时间": self._format_timestamp(self._last_updated),
+            "更新状态": "成功" if self.coordinator.last_update_success else "失败",
+        }
+        data = self.coordinator.data
+        if isinstance(data, dict):
+            err = data.get("error")
+            if err:
+                attrs["错误"] = err
+            storages = data.get("data", [])
+            if isinstance(storages, list):
+                attrs["存储列表"] = [
+                    {
+                        "id": s.get("id"),
+                        "mount_path": s.get("mount_path"),
+                        "driver": s.get("driver"),
+                        "status": s.get("status"),
+                    }
+                    for s in storages[:20]
+                    if isinstance(s, dict)
+                ]
+        return attrs
 
-            if not isinstance(data, dict):
-                return {
-                    "状态": "数据无效",
-                    "错误详情": f"预期dict，实际{type(data).__name__}",
-                    "最后更新时间": self._format_timestamp(self._last_updated),
-                    "目录路径": self._dir_path
-                }
 
-            if data.get("code") == 401:
-                return {
-                    "状态": "认证失败",
-                    "错误详情": data.get("message", "未知错误"),
-                    "最后更新时间": self._format_timestamp(self._last_updated),
-                    "目录路径": self._dir_path
-                }
+# ---------------------------------------------------------------------------
+# 平台入口
+# ---------------------------------------------------------------------------
+async def async_setup_entry(
+    hass: HomeAssistant, entry, async_add_entities: AddEntitiesCallback,
+) -> None:
+    data = hass.data[DOMAIN][entry.entry_id]
+    file_coordinator = data["file_coordinator"]
+    task_coordinator = data["task_coordinator"]
+    storage_coordinator = data.get("storage_coordinator")
+    track_dirs_coordinators = data.get("track_dirs_coordinators", {})
+    device_info = data.get("device_info")
 
-            api_data = data.get("data")
-            if api_data is None:
-                return {
-                    "状态": "数据不完整",
-                    "错误详情": "缺少'data'字段",
-                    "最后更新时间": self._format_timestamp(self._last_updated),
-                    "目录路径": self._dir_path
-                }
+    sensors: list[Entity] = [OpenListFilesSensor(file_coordinator, entry.title)]
 
-            if not isinstance(api_data, dict):
-                return {
-                    "状态": "数据格式错误",
-                    "错误详情": f"'data'不是字典，实际{type(api_data).__name__}",
-                    "最后更新时间": self._format_timestamp(self._last_updated),
-                    "目录路径": self._dir_path
-                }
+    for task_type, task_name in TASK_TYPES.items():
+        for sensor_type in (SENSOR_TYPE_DONE, SENSOR_TYPE_UNDONE, SENSOR_TYPE_FAILED):
+            sensors.append(OpenListTaskSensor(
+                task_coordinator, entry.title, task_type, task_name, sensor_type,
+            ))
+        sensors.append(OpenListTaskProgressSensor(
+            task_coordinator, entry.title, task_type, task_name,
+        ))
 
-            content = api_data.get("content", [])
-            if not isinstance(content, list):
-                content = []
+    for dir_path, coordinator in track_dirs_coordinators.items():
+        sensors.append(OpenListTrackDirSensor(coordinator, entry.title, dir_path))
 
-            file_names = [
-                item.get("name") 
-                for item in content
-                if isinstance(item, dict) and "name" in item
-            ]
+    # 存储传感器
+    if storage_coordinator is not None:
+        sensors.append(OpenListStorageCountSensor(storage_coordinator, entry.title))
 
-            modified_times = [
-                item.get("modified") 
-                for item in content 
-                if isinstance(item, dict) and "modified" in item and item["modified"]
-            ]
-            latest_modified = max(modified_times) if modified_times else None
+        if isinstance(storage_coordinator.data, dict):
+            storages = storage_coordinator.data.get("data", [])
+            if isinstance(storages, list) and storages:
+                for storage in storages:
+                    if isinstance(storage, dict) and storage.get("id") is not None:
+                        sensors.append(OpenListStorageSensor(
+                            storage_coordinator, entry.title, storage,
+                        ))
+                _LOGGER.info("已创建 %d 个存储状态传感器", len(storages))
+            else:
+                err = storage_coordinator.data.get("error", "未知")
+                _LOGGER.warning("未创建存储传感器：%s", err)
 
-            return {
-                "目录路径": self._dir_path,
-                "文件列表": file_names,
-                "文件总数": len(content),
-                "最新修改时间": latest_modified,
-                "更新状态": "成功" if self.coordinator.last_update_success else "失败",
-                "最后更新时间": self._format_timestamp(self._last_updated),
-                "传感器可用": self.available
-            }
+    # 挂载设备信息
+    if device_info:
+        for s in sensors:
+            s._attr_device_info = device_info
 
-        except Exception as err:
-            _LOGGER.error(f"获取跟踪目录属性出错 [目录: {self._dir_path}]: {err}", exc_info=True)
-            return {
-                "状态": "获取属性失败",
-                "错误信息": str(err),
-                "最后更新时间": self._format_timestamp(self._last_updated),
-                "目录路径": self._dir_path
-            }
-
-    @property
-    def available(self) -> bool:
-        return (
-            self.coordinator.last_update_success 
-            and isinstance(self.coordinator.data, dict)
-            and self.coordinator.data.get("code") != 401
-        )
-
-    @property
-    def icon(self) -> str:
-        return "mdi:folder-search"
-
-    @property
-    def should_poll(self) -> bool:
-        return False
-
-    def _format_timestamp(self, timestamp: float | None) -> str | None:
-        """格式化自定义时间戳"""
-        if timestamp is None:
-            return "从未更新"
-        try:
-            local_time = datetime.fromtimestamp(timestamp)
-            return local_time.strftime("%Y-%m-%d %H:%M:%S")
-        except Exception as err:
-            _LOGGER.error(f"格式化时间失败: {err}")
-            return str(timestamp)
+    async_add_entities(sensors, update_before_add=False)
+    _LOGGER.debug("OpenList 传感器已创建: %d 个", len(sensors))

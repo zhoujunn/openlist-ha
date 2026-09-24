@@ -1,0 +1,36 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "连接 OpenList",
+        "description": "填写 OpenList 服务器信息。",
+        "data": {
+          "host": "服务器地址",
+          "username": "用户名",
+          "password": "密码",
+          "track_dirs": "跟踪目录（可选，英文逗号分隔）"
+        }
+      }
+    },
+    "error": {
+      "invalid_host": "地址必须以 http:// 或 https:// 开头",
+      "empty_credentials": "用户名与密码不能为空",
+      "auth_failed": "登录失败，请检查地址/账号/密码"
+    },
+    "abort": {
+      "already_configured": "该 OpenList 实例已配置"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "修改 OpenList 选项",
+        "description": "修改跟踪目录与轮询间隔后，集成会自动重新加载。",
+        "data": {
+          "track_dirs": "跟踪目录（英文逗号分隔，留空则清空）",
+          "update_interval": "轮询间隔（分钟，1-60）"
+        }
+      }
+    }
+  }
+}
